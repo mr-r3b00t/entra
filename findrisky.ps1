@@ -153,6 +153,36 @@ if ($ExportCsv) {
     $results | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8
     Write-Host "`nExported to $CsvPath" -ForegroundColor Green
 }
+else {
+    Write-Host ""
+    Write-Host "Would you like to export the results to CSV?" -ForegroundColor Cyan
+    Write-Host "  [1] Yes - export to default path ($CsvPath)"
+    Write-Host "  [2] Yes - specify a custom path"
+    Write-Host "  [3] No  - skip export"
+    Write-Host ""
+
+    $choice = Read-Host "Select an option (1/2/3)"
+
+    switch ($choice) {
+        "1" {
+            $results | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8
+            Write-Host "`nExported to $CsvPath" -ForegroundColor Green
+        }
+        "2" {
+            $customPath = Read-Host "Enter the full file path (e.g. C:\Reports\risky.csv)"
+            if ([string]::IsNullOrWhiteSpace($customPath)) {
+                Write-Host "No path provided. Skipping export." -ForegroundColor Yellow
+            }
+            else {
+                $results | Export-Csv -Path $customPath -NoTypeInformation -Encoding UTF8
+                Write-Host "`nExported to $customPath" -ForegroundColor Green
+            }
+        }
+        default {
+            Write-Host "Export skipped." -ForegroundColor DarkGray
+        }
+    }
+}
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 Disconnect-MgGraph | Out-Null
