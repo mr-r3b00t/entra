@@ -232,6 +232,7 @@ foreach ($riskyUser in $riskyUsers) {
             AllDetectionsDetail        = "N/A"
             LastPasswordChangeDate     = "N/A"
             PasswordChangedAfterRisk   = "UNKNOWN"
+            RemediationStatus          = "UNKNOWN"
         })
         continue
     }
@@ -314,17 +315,28 @@ foreach ($riskyUser in $riskyUsers) {
         $allDetectionsSummary = $summaryLines -join " ;; "
     }
 
-    # Compare
+    # Determine remediation status based on riskState AND password change
+    $riskState = $riskyUser.RiskState
+    $pwdChangedAfterRisk = $null
     if ($null -ne $pwdChangeDate -and $null -ne $detectionDate) {
-        $remediated = $pwdChangeDate -gt $detectionDate
-    }
-    else {
-        $remediated = $null
+        $pwdChangedAfterRisk = $pwdChangeDate -gt $detectionDate
     }
 
-    $status = switch ($remediated) {
-        $true   { "YES" }
-        $false  { "NO" }
+    # Comprehensive remediation status:
+    #   - dismissed / remediated / confirmedSafe -> already handled
+    #   - atRisk + password changed after detection -> remediated (eligible for dismissal)
+    #   - atRisk + password NOT changed -> NOT remediated
+    #   - confirmedCompromised -> flagged, needs investigation
+    $remediationStatus = switch ($riskState) {
+        "dismissed"              { "DISMISSED" }
+        "remediated"             { "REMEDIATED" }
+        "confirmedSafe"          { "CONFIRMED_SAFE" }
+        "confirmedCompromised"   { "COMPROMISED" }
+        "atRisk" {
+            if ($pwdChangedAfterRisk -eq $true) { "YES" }
+            elseif ($pwdChangedAfterRisk -eq $false) { "NO" }
+            else { "UNKNOWN" }
+        }
         default { "UNKNOWN" }
     }
 
@@ -333,7 +345,7 @@ foreach ($riskyUser in $riskyUsers) {
         UserPrincipalName          = $user.UserPrincipalName
         DisplayName                = $user.DisplayName
         RiskLevel                  = $riskyUser.RiskLevel
-        RiskState                  = $riskyUser.RiskState
+        RiskState                  = $riskState
         RiskLastUpdated            = $riskyUser.RiskLastUpdatedDateTime
         LatestRiskDetectionDate    = $detectionDate
         RiskDetectionType          = $detectionType
@@ -344,20 +356,25 @@ foreach ($riskyUser in $riskyUsers) {
         TotalDetections            = $(if ($userDetections) { $userDetections.Count } else { 0 })
         AllDetectionsDetail        = $allDetectionsSummary
         LastPasswordChangeDate     = $pwdChangeDate
-        PasswordChangedAfterRisk   = $status
+        PasswordChangedAfterRisk   = $(if ($pwdChangedAfterRisk -eq $true) { "YES" } elseif ($pwdChangedAfterRisk -eq $false) { "NO" } else { "UNKNOWN" })
+        RemediationStatus          = $remediationStatus
     }
 
     $results.Add($obj)
 
     # Console colour coding
-    $colour = switch ($status) {
-        "YES"     { "Green"  }
-        "NO"      { "Red"    }
-        default   { "Yellow" }
+    $colour = switch ($remediationStatus) {
+        "YES"              { "Green"   }
+        "DISMISSED"        { "Green"   }
+        "REMEDIATED"       { "Green"   }
+        "CONFIRMED_SAFE"   { "Green"   }
+        "NO"               { "Red"     }
+        "COMPROMISED"      { "Red"     }
+        default            { "Yellow"  }
     }
 
     Write-Host "`n  $($user.DisplayName) ($($user.UserPrincipalName))" -ForegroundColor White
-    Write-Host "    Risk Level   : $($riskyUser.RiskLevel) | State: $($riskyUser.RiskState)" -ForegroundColor Yellow
+    Write-Host "    Risk Level   : $($riskyUser.RiskLevel) | State: $riskState" -ForegroundColor Yellow
     Write-Host "    Why Risky    : $riskExplanation" -ForegroundColor Magenta
     if ($sourceIP -ne "N/A")    { Write-Host "    Source IP    : $sourceIP" -ForegroundColor DarkCyan }
     if ($locationStr -ne "N/A") { Write-Host "    Location     : $locationStr" -ForegroundColor DarkCyan }
@@ -367,20 +384,25 @@ foreach ($riskyUser in $riskyUsers) {
     }
     Write-Host "    Detection    : $detectionDate" -NoNewline
     Write-Host "  |  Pwd Changed : $pwdChangeDate" -NoNewline
-    Write-Host "  |  Remediated  : $status" -ForegroundColor $colour
+    Write-Host "  |  Status      : $remediationStatus" -ForegroundColor $colour
 }
 
 # -- 4. Output ----------------------------------------------------------------
 Write-Host "`n------------------------------------------------------------" -ForegroundColor DarkGray
 Write-Host "SUMMARY" -ForegroundColor Cyan
 Write-Host "  Total risky users : $($results.Count)"
-Write-Host "  Password changed  : $(@($results | Where-Object PasswordChangedAfterRisk -eq 'YES').Count)" -ForegroundColor Green
-Write-Host "  NOT changed       : $(@($results | Where-Object PasswordChangedAfterRisk -eq 'NO').Count)" -ForegroundColor Red
-Write-Host "  Unknown           : $(@($results | Where-Object PasswordChangedAfterRisk -eq 'UNKNOWN').Count)" -ForegroundColor Yellow
-Write-Host "  Currently atRisk  : $(@($results | Where-Object RiskState -eq 'atRisk').Count)" -ForegroundColor DarkCyan
-Write-Host "  Eligible to dismiss (atRisk + pwd changed): $(@($results | Where-Object { $_.RiskState -eq 'atRisk' -and $_.PasswordChangedAfterRisk -eq 'YES' }).Count)" -ForegroundColor Cyan
+Write-Host "  -- Remediation Status Breakdown --" -ForegroundColor DarkGray
+Write-Host "  atRisk + pwd changed (YES)  : $(@($results | Where-Object RemediationStatus -eq 'YES').Count)" -ForegroundColor Green
+Write-Host "  atRisk + pwd NOT changed (NO): $(@($results | Where-Object RemediationStatus -eq 'NO').Count)" -ForegroundColor Red
+Write-Host "  atRisk + unknown             : $(@($results | Where-Object RemediationStatus -eq 'UNKNOWN').Count)" -ForegroundColor Yellow
+Write-Host "  Already dismissed            : $(@($results | Where-Object RemediationStatus -eq 'DISMISSED').Count)" -ForegroundColor Green
+Write-Host "  Already remediated           : $(@($results | Where-Object RemediationStatus -eq 'REMEDIATED').Count)" -ForegroundColor Green
+Write-Host "  Confirmed safe               : $(@($results | Where-Object RemediationStatus -eq 'CONFIRMED_SAFE').Count)" -ForegroundColor Green
+Write-Host "  Confirmed compromised        : $(@($results | Where-Object RemediationStatus -eq 'COMPROMISED').Count)" -ForegroundColor Red
+Write-Host "  -- Actions --" -ForegroundColor DarkGray
+Write-Host "  Eligible to dismiss (atRisk + pwd changed): $(@($results | Where-Object { $_.RiskState -eq 'atRisk' -and $_.RemediationStatus -eq 'YES' }).Count)" -ForegroundColor Cyan
 
-$results | Select-Object UserPrincipalName, DisplayName, RiskLevel, RiskState, RiskDetectionType, RiskReason, SourceIP, Location, TotalDetections, LatestRiskDetectionDate, LastPasswordChangeDate, PasswordChangedAfterRisk | Format-List
+$results | Select-Object UserPrincipalName, DisplayName, RiskLevel, RiskState, RiskDetectionType, RiskReason, SourceIP, Location, TotalDetections, LatestRiskDetectionDate, LastPasswordChangeDate, PasswordChangedAfterRisk, RemediationStatus | Format-List
 
 if ($ExportCsv) {
     $results | Export-Csv -Path $CsvPath -NoTypeInformation -Encoding UTF8
@@ -418,7 +440,7 @@ else {
 }
 
 # -- 5. Offer to dismiss risk for remediated users -------------------------
-$remediatedUsers = @($results | Where-Object { $_.PasswordChangedAfterRisk -eq "YES" -and $_.RiskState -eq "atRisk" })
+$remediatedUsers = @($results | Where-Object { $_.RemediationStatus -eq "YES" -and $_.RiskState -eq "atRisk" })
 
 if ($remediatedUsers.Count -gt 0) {
     Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
@@ -556,6 +578,7 @@ $variablesToClear = @(
     'loc', 'locationStr', 'parts',
     'riskReasonParts', 'riskExplanation', 'riskReason',
     'userDetections', 'allDetectionsSummary', 'sorted', 'summaryLines',
+    'riskState', 'pwdChangedAfterRisk', 'remediationStatus',
     'remediated', 'status', 'obj', 'colour',
     'choice', 'customPath',
     'remediatedUsers', 'remediatedArray',
