@@ -375,6 +375,8 @@ Write-Host "  Total risky users : $($results.Count)"
 Write-Host "  Password changed  : $(@($results | Where-Object PasswordChangedAfterRisk -eq 'YES').Count)" -ForegroundColor Green
 Write-Host "  NOT changed       : $(@($results | Where-Object PasswordChangedAfterRisk -eq 'NO').Count)" -ForegroundColor Red
 Write-Host "  Unknown           : $(@($results | Where-Object PasswordChangedAfterRisk -eq 'UNKNOWN').Count)" -ForegroundColor Yellow
+Write-Host "  Currently atRisk  : $(@($results | Where-Object RiskState -eq 'atRisk').Count)" -ForegroundColor DarkCyan
+Write-Host "  Eligible to dismiss (atRisk + pwd changed): $(@($results | Where-Object { $_.RiskState -eq 'atRisk' -and $_.PasswordChangedAfterRisk -eq 'YES' }).Count)" -ForegroundColor Cyan
 
 $results | Select-Object UserPrincipalName, DisplayName, RiskLevel, RiskState, RiskDetectionType, RiskReason, SourceIP, Location, TotalDetections, LatestRiskDetectionDate, LastPasswordChangeDate, PasswordChangedAfterRisk | Format-List
 
@@ -414,14 +416,14 @@ else {
 }
 
 # -- 5. Offer to dismiss risk for remediated users -------------------------
-$remediatedUsers = @($results | Where-Object PasswordChangedAfterRisk -eq "YES")
+$remediatedUsers = @($results | Where-Object { $_.PasswordChangedAfterRisk -eq "YES" -and $_.RiskState -eq "atRisk" })
 
 if ($remediatedUsers.Count -gt 0) {
     Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
     Write-Host "RISK DISMISSAL" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "The following $($remediatedUsers.Count) user(s) have changed their password AFTER the risk detection" -ForegroundColor Green
-    Write-Host "and are eligible to have their risk state dismissed:" -ForegroundColor Green
+    Write-Host "The following $($remediatedUsers.Count) user(s) are currently 'atRisk' and have changed their" -ForegroundColor Green
+    Write-Host "password AFTER the risk detection, making them eligible for dismissal:" -ForegroundColor Green
     Write-Host ""
 
     $i = 1
@@ -508,7 +510,7 @@ if ($remediatedUsers.Count -gt 0) {
     }
 }
 else {
-    Write-Host "`nNo remediated users eligible for risk dismissal." -ForegroundColor DarkGray
+    Write-Host "`nNo users eligible for risk dismissal (requires riskState 'atRisk' + password changed after detection)." -ForegroundColor DarkGray
 }
 
 # -- Cleanup -------------------------------------------------------------------
