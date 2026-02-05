@@ -112,7 +112,7 @@ Write-Host "Found $($riskyUsers.Count) risky user(s).`n" -ForegroundColor Yellow
 
 if ($riskyUsers.Count -eq 0) {
     Write-Host "No risky users found. Exiting." -ForegroundColor Green
-    Disconnect-MgGraph | Out-Null
+    Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
     return
 }
 
@@ -500,7 +500,8 @@ if ($remediatedUsers.Count -gt 0) {
                 }
 
                 try {
-                    Invoke-MgDismissRiskyUser -BodyParameter @{ UserIds = @($uid) } -ErrorAction Stop
+                    $body = @{ userIds = @($uid) } | ConvertTo-Json -Compress
+                    Invoke-MgGraphRequest -Method POST -Uri "https://graph.microsoft.com/v1.0/identityProtection/riskyUsers/dismiss" -Body $body -ContentType "application/json" -ErrorAction Stop
                     Write-Host " Done" -ForegroundColor Green
                     $dismissedCount++
                 }
@@ -532,9 +533,41 @@ Write-Host ""
 $disconnectChoice = Read-Host "Select an option (1/2)"
 
 if ($disconnectChoice -eq "1") {
-    Disconnect-MgGraph | Out-Null
+    Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
     Write-Host "Disconnected from Graph." -ForegroundColor DarkGray
 }
 else {
     Write-Host "Session kept active. Run 'Disconnect-MgGraph' when finished." -ForegroundColor Green
 }
+
+# -- Clear script variables to prevent stale data in session --------------------
+Write-Host "Clearing script variables..." -ForegroundColor DarkGray
+
+$variablesToClear = @(
+    'context', 'ctx', 'needsConnect', 'sessionIdentity', 'identity',
+    'currentScopes', 'hasRiskyUserWrite', 'hasRiskEvent', 'hasUserRead', 'missing',
+    'riskyUsers', 'maxRetries', 'retryCount',
+    'daysInput', 'detectionDays', 'filterDate', 'pageSize',
+    'riskDetections', 'latestDetectionByUser', 'allDetectionsByUser',
+    'det', 'uid', 'detDate',
+    'results', 'riskyUser', 'userId', 'upn', 'user',
+    'pwdChangeDate', 'detection', 'detectionDate', 'detectionType',
+    'riskDetail', 'sourceIP', 'detSource',
+    'loc', 'locationStr', 'parts',
+    'riskReasonParts', 'riskExplanation', 'riskReason',
+    'userDetections', 'allDetectionsSummary', 'sorted', 'summaryLines',
+    'remediated', 'status', 'obj', 'colour',
+    'choice', 'customPath',
+    'remediatedUsers', 'remediatedArray',
+    'dismissChoice', 'usersToDismiss', 'selection', 'indices',
+    'confirm', 'dismissedCount', 'failedCount',
+    'body', 'disconnectChoice',
+    'i', 'idx', 'ru', 'u', 'd', 'dLoc', 'dParts', 'dIP'
+)
+
+foreach ($var in $variablesToClear) {
+    Remove-Variable -Name $var -ErrorAction SilentlyContinue
+}
+Remove-Variable -Name 'variablesToClear' -ErrorAction SilentlyContinue
+
+Write-Host "Done.`n" -ForegroundColor DarkGray
