@@ -524,5 +524,17 @@ else {
 }
 
 # -- Cleanup -------------------------------------------------------------------
-Disconnect-MgGraph | Out-Null
-Write-Host "`nDisconnected from Graph." -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "Would you like to disconnect from Microsoft Graph?" -ForegroundColor Cyan
+Write-Host "  [1] Yes - disconnect"
+Write-Host "  [2] No  - keep session active"
+Write-Host ""
+$disconnectChoice = Read-Host "Select an option (1/2)"
+
+if ($disconnectChoice -eq "1") {
+    Disconnect-MgGraph | Out-Null
+    Write-Host "Disconnected from Graph." -ForegroundColor DarkGray
+}
+else {
+    Write-Host "Session kept active. Run 'Disconnect-MgGraph' when finished." -ForegroundColor Green
+}
