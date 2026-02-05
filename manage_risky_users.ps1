@@ -216,6 +216,7 @@ foreach ($riskyUser in $riskyUsers) {
     catch {
         Write-Warning "Could not retrieve user details for $upn ($userId): $_"
         $results.Add([PSCustomObject]@{
+            UserId                     = $userId
             UserPrincipalName          = $upn
             DisplayName                = "N/A"
             RiskLevel                  = $riskyUser.RiskLevel
@@ -328,6 +329,7 @@ foreach ($riskyUser in $riskyUsers) {
     }
 
     $obj = [PSCustomObject]@{
+        UserId                     = $userId
         UserPrincipalName          = $user.UserPrincipalName
         DisplayName                = $user.DisplayName
         RiskLevel                  = $riskyUser.RiskLevel
@@ -486,8 +488,16 @@ if ($remediatedUsers.Count -gt 0) {
             $failedCount    = 0
 
             foreach ($u in $usersToDismiss) {
-                $uid = ($riskyUsers | Where-Object UserPrincipalName -eq $u.UserPrincipalName).Id
-                Write-Host "  Dismissing risk for $($u.UserPrincipalName)..." -ForegroundColor Cyan -NoNewline
+                $uid = $u.UserId
+                Write-Host "  Dismissing risk for $($u.UserPrincipalName) (ID: $uid)..." -ForegroundColor Cyan -NoNewline
+
+                # Validate the ID is a proper GUID before calling the API
+                if ($uid -notmatch '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
+                    Write-Host " SKIPPED" -ForegroundColor Yellow
+                    Write-Warning "    Invalid user ID format: '$uid'"
+                    $failedCount++
+                    continue
+                }
 
                 try {
                     Invoke-MgDismissRiskyUser -BodyParameter @{ UserIds = @($uid) } -ErrorAction Stop
