@@ -239,21 +239,80 @@ foreach ($riskyUser in $riskyUsers) {
 
     $pwdChangeDate = $user.LastPasswordChangeDateTime
 
-    # Look up the latest risk detection for this user
-    $detection     = $latestDetectionByUser[$userId]
+    # Look up detections for this user (3-tier fallback)
+    $detection = $latestDetectionByUser[$userId]
+    $userDetections = $allDetectionsByUser[$userId]
+
+    # Tier 2: Direct query if no detections in batch
+    if (-not $detection) {
+        try {
+            $directDetections = Get-MgRiskDetection -Filter "userId eq '$userId'" -Top 10 -ErrorAction Stop
+            if ($directDetections -and $directDetections.Count -gt 0) {
+                $userDetections = [System.Collections.Generic.List[object]]::new()
+                foreach ($dd in $directDetections) { $userDetections.Add($dd) }
+                $detection = ($directDetections | Sort-Object DetectedDateTime -Descending)[0]
+            }
+        }
+        catch {
+            # Silently continue to tier 3
+        }
+    }
+
+    # Tier 3: Risky user history endpoint (retains data beyond detection API limits)
+    if (-not $detection) {
+        try {
+            $historyUri = "https://graph.microsoft.com/v1.0/identityProtection/riskyUsers/$userId/history"
+            $historyResponse = Invoke-MgGraphRequest -Method GET -Uri $historyUri -ErrorAction Stop
+
+            if ($historyResponse -and $historyResponse.value -and $historyResponse.value.Count -gt 0) {
+                $userDetections = [System.Collections.Generic.List[object]]::new()
+                foreach ($histEntry in $historyResponse.value) {
+                    $activity = $histEntry.activity
+                    if (-not $activity) { continue }
+
+                    $histObj = [PSCustomObject]@{
+                        DetectedDateTime = $histEntry.riskLastUpdatedDateTime
+                        RiskEventType    = if ($activity.riskEventTypes -and $activity.riskEventTypes.Count -gt 0) { $activity.riskEventTypes[0] } elseif ($activity.eventTypes -and $activity.eventTypes.Count -gt 0) { $activity.eventTypes[0] } else { "N/A" }
+                        RiskDetail       = if ($histEntry.riskDetail) { $histEntry.riskDetail } else { "N/A" }
+                        IpAddress        = if ($activity.ipAddress) { $activity.ipAddress } else { $null }
+                        Location         = if ($activity.location) { $activity.location } else { $null }
+                        Source           = "riskyUserHistory"
+                        UserId           = $userId
+                    }
+
+                    if ($histObj.RiskEventType -eq "N/A" -and $histEntry.riskDetail -and $histEntry.riskDetail -ne "none") {
+                        $histObj.RiskEventType = $histEntry.riskDetail
+                    }
+
+                    $userDetections.Add($histObj)
+                }
+
+                if ($userDetections.Count -gt 0) {
+                    $detection = ($userDetections | Sort-Object DetectedDateTime -Descending)[0]
+                }
+            }
+        }
+        catch {
+            # No history available
+        }
+    }
+
     $detectionDate = if ($detection) { $detection.DetectedDateTime } else { $riskyUser.RiskLastUpdatedDateTime }
     $detectionType = if ($detection) { $detection.RiskEventType }    else { "N/A" }
 
-    # Extract detailed risk context from the latest detection
+    # Extract detailed risk context from the detection
     $riskDetail    = if ($detection) { $detection.RiskDetail }       else { "N/A" }
     $sourceIP      = if ($detection -and $detection.IpAddress) { $detection.IpAddress } else { "N/A" }
     $detSource     = if ($detection) { $detection.Source }            else { "N/A" }
 
-    # Location info (city, state, country)
+    # Location info (handles both SDK objects and history hashtables)
     $locationStr = "N/A"
     if ($detection -and $detection.Location) {
         $loc = $detection.Location
-        $parts = @($loc.City, $loc.State, $loc.CountryOrRegion) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $city    = if ($loc -is [hashtable]) { $loc["city"] } else { $loc.City }
+        $state   = if ($loc -is [hashtable]) { $loc["state"] } else { $loc.State }
+        $country = if ($loc -is [hashtable]) { $loc["countryOrRegion"] } else { $loc.CountryOrRegion }
+        $parts = @($city, $state, $country) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         if ($parts.Count -gt 0) { $locationStr = $parts -join ", " }
     }
 
@@ -298,15 +357,18 @@ foreach ($riskyUser in $riskyUsers) {
 
     $riskReason = $riskReasonParts -join " | "
 
-    # Collect ALL detections for this user for the detail column
-    $userDetections = $allDetectionsByUser[$userId]
+    # Build all detections summary for the detail column
     $allDetectionsSummary = "N/A"
     if ($userDetections -and $userDetections.Count -gt 0) {
         $sorted = $userDetections | Sort-Object DetectedDateTime -Descending
         $summaryLines = foreach ($d in $sorted) {
             $dLoc = "N/A"
             if ($d.Location) {
-                $dParts = @($d.Location.City, $d.Location.State, $d.Location.CountryOrRegion) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                $dLocObj = $d.Location
+                $dCity    = if ($dLocObj -is [hashtable]) { $dLocObj["city"] } else { $dLocObj.City }
+                $dState   = if ($dLocObj -is [hashtable]) { $dLocObj["state"] } else { $dLocObj.State }
+                $dCountry = if ($dLocObj -is [hashtable]) { $dLocObj["countryOrRegion"] } else { $dLocObj.CountryOrRegion }
+                $dParts = @($dCity, $dState, $dCountry) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
                 if ($dParts.Count -gt 0) { $dLoc = $dParts -join ", " }
             }
             $dIP = if ($d.IpAddress) { $d.IpAddress } else { "N/A" }
@@ -574,10 +636,12 @@ $variablesToClear = @(
     'det', 'uid', 'detDate',
     'results', 'riskyUser', 'userId', 'upn', 'user',
     'pwdChangeDate', 'detection', 'detectionDate', 'detectionType',
+    'directDetections', 'dd', 'historyUri', 'historyResponse', 'histEntry', 'histObj', 'activity',
     'riskDetail', 'sourceIP', 'detSource',
-    'loc', 'locationStr', 'parts',
+    'loc', 'locationStr', 'parts', 'city', 'state', 'country',
     'riskReasonParts', 'riskExplanation', 'riskReason',
     'userDetections', 'allDetectionsSummary', 'sorted', 'summaryLines',
+    'dLocObj', 'dCity', 'dState', 'dCountry',
     'riskState', 'pwdChangedAfterRisk', 'remediationStatus',
     'remediated', 'status', 'obj', 'colour',
     'choice', 'customPath',
